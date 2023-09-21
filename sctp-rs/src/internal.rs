@@ -713,6 +713,41 @@ fn notification_from_message(data: &[u8]) -> Notification {
             };
             Notification::Shutdown(shutdown)
         }
+        SCTP_PEER_ADDR_CHANGE => {
+            log::debug!("SCTP_PEER_ADDR_CHANGE Notification Received.");
+            // TODO: handle notification
+            Notification::PeerAddrChange
+        }
+        SCTP_SEND_FAILED => {
+            log::debug!("SCTP_SEND_FAILED Notification Received.");
+            // TODO: handle notification
+            Notification::SendFailed
+        }
+        SCTP_REMOTE_ERROR => {
+            log::debug!("SCTP_REMOTE_ERROR Notification Received.");
+            // TODO: handle notification
+            Notification::RemoteError
+        }
+        SCTP_PARTIAL_DELIVERY_EVENT => {
+            log::debug!("SCTP_PARTIAL_DELIVERY_EVENT Notification Received.");
+            // TODO: handle notification
+            Notification::PartialDeliveryEvent
+        }
+        SCTP_ADAPTATION_INDICATION => {
+            log::debug!("SCTP_ADAPTATION_INDICATION Notification Received.");
+            // TODO: handle notification
+            Notification::AdaptationIndication
+        }
+        SCTP_AUTHENTICATION_EVENT => {
+            log::debug!("SCTP_AUTHENTICATION_EVENT Notification Received.");
+            // TODO: handle notification
+            Notification::AuthenticationEvent
+        }
+        SCTP_SENDER_DRY_EVENT => {
+            log::debug!("SCTP_SENDER_DRY_EVENT Notification Received.");
+            // TODO: handle notification
+            Notification::SenderDryEvent
+        }
         _ => {
             log::debug!("Unsupported notification received.");
             Notification::Unsupported

@@ -136,8 +136,30 @@ pub enum Notification {
     /// Association Change Notification. See Section 6.1.1 of RFC 6458.
     AssociationChange(AssociationChange),
 
+    /// Peer Address Change Notification. See Section 6.1.2 of RFC 6458.
+    PeerAddrChange,
+
+    /// Send Failed Notification. See Section 6.1.4 of RFC 6458. Deprecated.
+    SendFailed,
+
+    /// Remote Operation Error Notification. See Section 6.1.3 of RFC 6458.
+    RemoteError,
+
     /// Shutdown Notification. See Section 6.1.5 of RFC 6458.
     Shutdown(Shutdown),
+
+    /// Partial Delivery Event Notification. See Section 6.1.7 of RFC 6458.
+    PartialDeliveryEvent,
+
+    /// Adaptation Indication Notification. See Section 6.1.6 of RFC 6458.
+    AdaptationIndication,
+
+    /// Authentication Event Notification. See Section 6.1.8 of RFC 6458.
+    AuthenticationEvent,
+
+    /// Sender Dry Event Notification. See Section 6.1.9 of RFC 6458.
+    SenderDryEvent,
+
     /// A Catchall Notification type for the Notifications that are not supported
     Unsupported,
 }
