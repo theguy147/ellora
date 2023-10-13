@@ -915,6 +915,9 @@ fn set_fd_non_blocking(fd: RawFd) -> std::io::Result<()> {
 #[inline(always)]
 pub(crate) fn close_internal(fd: &AsyncFd<RawFd>) {
     unsafe {
-        _ = libc::close(*fd.get_ref());
+        let ret = libc::close(*fd.get_ref());
+        if ret != 0 {
+            eprintln!("Closing socket failed")
+        }
     }
 }
