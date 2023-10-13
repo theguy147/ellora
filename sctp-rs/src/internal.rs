@@ -557,13 +557,15 @@ pub(crate) async fn sctp_recvmsg_internal(
                             cmsghdr,
                         );
                     }
-
-                    log::debug!("Received Data.");
-                    return Ok(NotificationOrData::Data(ReceivedData {
-                        payload: recv_buffer,
-                        rcv_info,
-                        nxt_info,
-                    }));
+                    if recv_buffer.len() > 0 {
+                        log::debug!("Received Data.");
+                        return Ok(NotificationOrData::Data(ReceivedData {
+                            payload: recv_buffer,
+                            rcv_info,
+                            nxt_info,
+                        }));
+                    }
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Buffer empty"));
                 }
             }
         }
