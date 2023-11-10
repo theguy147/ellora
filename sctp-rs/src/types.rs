@@ -1,5 +1,10 @@
 //! Types used by the Public APIs
 
+use std::fmt::Debug;
+use std::net::SocketAddr;
+
+use libc::sctp_sndrcvinfo;
+
 /// SCTP Association ID Type
 pub type AssociationId = i32;
 
@@ -137,28 +142,28 @@ pub enum Notification {
     AssociationChange(AssociationChange),
 
     /// Peer Address Change Notification. See Section 6.1.2 of RFC 6458.
-    PeerAddrChange,
+    PeerAddrChange(PeerAddrChange),
 
     /// Send Failed Notification. See Section 6.1.4 of RFC 6458. Deprecated.
-    SendFailed,
+    SendFailed(SendFailed),
 
     /// Remote Operation Error Notification. See Section 6.1.3 of RFC 6458.
-    RemoteError,
+    RemoteError(RemoteError),
 
     /// Shutdown Notification. See Section 6.1.5 of RFC 6458.
     Shutdown(Shutdown),
 
     /// Partial Delivery Event Notification. See Section 6.1.7 of RFC 6458.
-    PartialDeliveryEvent,
+    PartialDeliveryEvent(PdapiEvent),
 
     /// Adaptation Indication Notification. See Section 6.1.6 of RFC 6458.
-    AdaptationIndication,
+    AdaptationIndication(AdaptationEvent),
 
     /// Authentication Event Notification. See Section 6.1.8 of RFC 6458.
-    AuthenticationEvent,
+    AuthenticationEvent(AuthkeyEvent),
 
     /// Sender Dry Event Notification. See Section 6.1.9 of RFC 6458.
-    SenderDryEvent,
+    SenderDryEvent(SenderDryEvent),
 
     /// A Catchall Notification type for the Notifications that are not supported
     Unsupported,
@@ -199,14 +204,193 @@ pub struct AssociationChange {
     pub info: Vec<u8>,
 }
 
-/// Shutdown: Structure rreturned as notification for Shutdown Event.
+/// PeerAddrChange: Structure returned as notification for Peer Address Change Event.
 ///
-///To subscribe to this notification type, An application should call `sctp_subscribe_event` using
-///the [`Event`] ty[e as [`Event::Shutdown`]
+/// To subscribe to this notification type, an application should call `sctp_subscribe_event` using
+/// the [`Event`] type as [`Event::Address`]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerAddrChange {
+    /// Type of the notification. Always `Address`
+    pub ev_type: Event,
+
+    /// Notification flags. Unused currently.
+    pub flags: u16,
+
+    /// Length of the notification data including the notification header.
+    pub length: u32,
+
+    /// The affected address field holds the remote peer's address that is changed.
+    pub aaddr: SocketAddr,
+
+    /// This fields holds one of a number of values that communicate the event that happened to the
+    /// address. They include: SCTP_ADDR_AVAILABLE, SCTP_ADDR_UNREACHABLE, SCTP_ADDR_REMOVED,
+    /// SCTP_ADDR_ADDED, SCTP_ADDR_MADE_PRIM.
+    pub state: u32,
+
+    /// If the state was reached due to any error condition, any relevant error info is available here.
+    pub error: u32,
+
+    /// Holds the identifier for the association.
+    pub assoc_id: i32,
+}
+
+/// SendFailed: Structure returned as notification for Send Failed Event.
+///
+/// To subscribe to this notification type, an application should call `sctp_subscribe_event` using
+/// the [`Event`] type as [`Event::SendFailure`]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendFailed {
+    /// Type of the notification. Always `SendFailure`
+    pub ev_type: Event,
+
+    /// Notification flags. One of the following: SCTP_DATA_UNSENT, SCTP_DATA_SENT.
+    pub flags: u16,
+
+    /// Length of the notification data including the notification header and the payload.
+    pub length: u32,
+
+    /// The reason why the send failed.
+    pub error: u32,
+
+    /// This field includes the ancillary data used to send the undelivered message.
+    pub ssf_info: sctp_sndrcvinfo,
+
+    /// Holds the identifier for the association.
+    pub assoc_id: AssociationId,
+
+    /// The undelivered message or part of the undelivered message.
+    pub data: Vec<u8>,
+}
+
+
+/// RemoteError: Structure returned as notification for Remote Error Event.
+///
+/// To subscribe to this notification type, an application should call `sctp_subscribe_event` using
+/// the [`Event`] type as [`Event::PeerError`]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteError {
+    /// Type of the notification. Always `RemoteError`
+    pub ev_type: Event,
+
+    /// Notification flags. Unused currently.
+    pub flags: u16,
+
+    /// Length of the notification data including the notification header and the payload.
+    pub length: u32,
+
+    /// The error code.
+    pub error: u16,
+
+    /// Holds the identifier for the association.
+    pub assoc_id: AssociationId,
+
+    /// The error message.
+    pub data: Vec<u8>,
+}
+
+/// Shutdown: Structure returned as notification for Shutdown Event.
+///
+///To subscribe to this notification type, an application should call `sctp_subscribe_event` using
+///the [`Event`] type as [`Event::Shutdown`]
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shutdown {
     /// Type of the Notification always `SCTP_SHUTDOWN`
+    pub ev_type: Event,
+
+    /// Notification Flags. Unused currently.
+    pub flags: u16,
+
+    /// Length of the notification data.
+    pub length: u32,
+
+    /// Association ID for the event.
+    pub assoc_id: AssociationId,
+}
+
+/// AdaptationEvent: Structure returned as notification for Adaptation Event.
+///
+/// To subscribe to this notification type, an application should call `sctp_subscribe_event` using
+/// the [`Event`] type as [`Event::AdaptationLayer`]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdaptationEvent {
+    /// Type of the Notification always `SCTP_ADAPTATION_INDICATION`
+    pub ev_type: Event,
+
+    /// Notification Flags. Unused currently.
+    pub flags: u16,
+
+    /// Length of the notification data.
+    pub length: u32,
+
+    /// Adaptation Indication.
+    pub adaptation_ind: u32,
+
+    /// Association ID for the event.
+    pub assoc_id: AssociationId,
+}
+
+pub struct PdapiEvent {
+    /// Type of the Notification always `SCTP_PARTIAL_DELIVERY_EVENT`
+    pub ev_type: Event,
+
+    /// Notification Flags. Unused currently.
+    pub flags: u16,
+
+    /// Length of the notification data.
+    pub length: u32,
+
+    /// Holds the Indication being sent to the application.
+    pub indication: u32,
+
+    /// Stream Number that was being partially delivered.
+    pub stream: u32,
+
+    /// Stream Sequence Number that was being partially delivered.
+    pub seq: u32,
+
+    /// Association ID for the event.
+    pub assoc_id: AssociationId,
+}
+
+/// AuthkeyEvent: Structure returned as notification for Authentication Event.
+///
+/// To subscribe to this notification type, an application should call `sctp_subscribe_event` using
+/// the [`Event`] type as [`Event::Authentication`]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthkeyEvent {
+    /// Type of the Notification always `SCTP_AUTHENTICATION_EVENT`
+    pub ev_type: Event,
+
+    /// Notification Flags. Unused currently.
+    pub flags: u16,
+
+    /// Length of the notification data.
+    pub length: u32,
+
+    /// Holds the key number of the key being used.
+    pub keynumber: u16,
+
+    /// Holds the Indication being sent to the application.
+    pub indication: u32,
+
+    /// Association ID for the event.
+    pub assoc_id: AssociationId,
+}
+
+/// SenderDryEvent: Structure returned as notification for Sender Dry Event.
+///
+/// To subscribe to this notification type, an application should call `sctp_subscribe_event` using
+/// the [`Event`] type as [`Event::SenderDry`]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenderDryEvent {
+    /// Type of the Notification always `SCTP_SENDER_DRY_EVENT`
     pub ev_type: Event,
 
     /// Notification Flags. Unused currently.

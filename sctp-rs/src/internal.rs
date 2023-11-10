@@ -3,21 +3,23 @@
 //! Nothing in this module should be public API as this module contains `unsafe` code that uses
 //! `libc` and internal `libc` structs and function calls.
 
-use tokio::io::unix::AsyncFd;
-
+use std::array::TryFromSliceError;
 use std::convert::TryInto;
 use std::net::SocketAddr;
 use std::os::unix::io::{AsRawFd, RawFd};
 
+use libc::sockaddr_storage;
 use os_socketaddr::OsSocketAddr;
+use tokio::io::unix::AsyncFd;
 
-use crate::types::internal::{
-    ConnStatusInternal, ConnectxParam, GetAddrs, InitMsg, SubscribeEvent,
-};
 use crate::{
-    AssocChangeState, AssociationChange, AssociationId, BindxFlags, CmsgType, ConnStatus,
-    ConnectedSocket, Event, Listener, Notification, NotificationOrData, NxtInfo, RcvInfo,
+    AssocChangeState, AssociationChange, AssociationId, BindxFlags, CmsgType, ConnectedSocket,
+    ConnStatus, Event, Listener, Notification, NotificationOrData, NxtInfo, RcvInfo,
     ReceivedData, SendData, SendInfo, Shutdown, SubscribeEventAssocId,
+};
+use crate::types::{AdaptationEvent, AuthkeyEvent, PdapiEvent, PeerAddrChange, RemoteError, SenderDryEvent, SendFailed};
+use crate::types::internal::{
+    ConnectxParam, ConnStatusInternal, GetAddrs, InitMsg, SubscribeEvent,
 };
 
 #[allow(unused)]
@@ -482,10 +484,10 @@ pub(crate) async fn sctp_recvmsg_internal(
             msg_control.fill(0);
             from_buffer.fill(0);
             #[cfg(target_os = "macos")]
-            let msg_controllen = msg_control_size as u32;
+                let msg_controllen = msg_control_size as u32;
 
             #[cfg(not(target_os = "macos"))]
-            let msg_controllen = msg_control_size as usize;
+                let msg_controllen = msg_control_size as usize;
 
             let mut recvmsg_header = libc::msghdr {
                 msg_name: from_buffer.as_mut_ptr() as *mut _ as *mut libc::c_void,
@@ -493,7 +495,7 @@ pub(crate) async fn sctp_recvmsg_internal(
                 msg_iov: &mut recv_iov,
                 msg_iovlen: 1,
                 msg_control: msg_control.as_mut_ptr() as *mut _ as *mut libc::c_void,
-                msg_controllen: msg_controllen,
+                msg_controllen,
                 msg_flags: 0,
             };
 
@@ -615,10 +617,10 @@ pub(crate) async fn sctp_sendmsg_internal(
             )
         };
         #[cfg(target_os = "macos")]
-        let msg_controllen = msg_control_size as u32;
+            let msg_controllen = msg_control_size as u32;
 
         #[cfg(not(target_os = "macos"))]
-        let msg_controllen = msg_control_size as usize;
+            let msg_controllen = msg_control_size as usize;
 
         let mut sendmsg_header = libc::msghdr {
             msg_name: to_buffer,
@@ -680,81 +682,211 @@ pub(crate) fn sctp_set_default_sendinfo_internal(
     }
 }
 
-fn notification_from_message(data: &[u8]) -> Notification {
-    let notification_type = u16::from_ne_bytes(data[0..2].try_into().unwrap());
+fn notification_from_message(data: &[u8]) -> Result<Notification, TryFromSliceError> {
+    let notification_type = u16::from_ne_bytes(data[0..2].try_into()?);
     log::trace!(
         "notification_type: {:x}, SCTP_ASSOC_CHANGE: {:x}",
         notification_type,
         SCTP_ASSOC_CHANGE
     );
-    match notification_type {
+    let notification = match notification_type {
         SCTP_ASSOC_CHANGE => {
             log::debug!("SCTP_ASSOC_CHANGE Notification Received.");
-            let assoc_change = AssociationChange {
-                ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into().unwrap())),
-                flags: u16::from_ne_bytes(data[2..4].try_into().unwrap()),
-                length: u32::from_ne_bytes(data[4..8].try_into().unwrap()),
-                state: AssocChangeState::from_u16(u16::from_ne_bytes(
-                    data[8..10].try_into().unwrap(),
-                )),
-                error: u16::from_ne_bytes(data[10..12].try_into().unwrap()),
-                ob_streams: u16::from_ne_bytes(data[12..14].try_into().unwrap()),
-                ib_streams: u16::from_ne_bytes(data[14..16].try_into().unwrap()),
-                assoc_id: i32::from_ne_bytes(data[16..20].try_into().unwrap()),
-                info: data[20..].into(),
-            };
+            let assoc_change = parse_sctp_assoc_change(data)?;
             Notification::AssociationChange(assoc_change)
         }
         SCTP_SHUTDOWN => {
             log::debug!("SCTP_SHUTDOWN Notification Received.");
-            let shutdown = Shutdown {
-                ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into().unwrap())),
-                flags: u16::from_ne_bytes(data[2..4].try_into().unwrap()),
-                length: u32::from_ne_bytes(data[4..8].try_into().unwrap()),
-                assoc_id: i32::from_ne_bytes(data[8..12].try_into().unwrap()),
-            };
+            let shutdown = parse_sctp_shutdown(data)?;
             Notification::Shutdown(shutdown)
         }
         SCTP_PEER_ADDR_CHANGE => {
             log::debug!("SCTP_PEER_ADDR_CHANGE Notification Received.");
-            // TODO: handle notification
-            Notification::PeerAddrChange
+            let peer_addr_change = parse_sctp_paddr_change(data)?;
+            Notification::PeerAddrChange(peer_addr_change)
         }
         SCTP_SEND_FAILED => {
             log::debug!("SCTP_SEND_FAILED Notification Received.");
-            // TODO: handle notification
-            Notification::SendFailed
+            let send_failed = parse_sctp_send_failed(data)?;
+            Notification::SendFailed(send_failed)
         }
         SCTP_REMOTE_ERROR => {
             log::debug!("SCTP_REMOTE_ERROR Notification Received.");
-            // TODO: handle notification
-            Notification::RemoteError
+            let remote_error = parse_sctp_remote_error(data)?;
+            Notification::RemoteError(remote_error)
         }
         SCTP_PARTIAL_DELIVERY_EVENT => {
             log::debug!("SCTP_PARTIAL_DELIVERY_EVENT Notification Received.");
-            // TODO: handle notification
-            Notification::PartialDeliveryEvent
+            let partial_delivery_event = parse_sctp_partial_delivery_event(data)?;
+            Notification::PartialDeliveryEvent(partial_delivery_event)
         }
         SCTP_ADAPTATION_INDICATION => {
             log::debug!("SCTP_ADAPTATION_INDICATION Notification Received.");
-            // TODO: handle notification
-            Notification::AdaptationIndication
+            let adaptation_indication = parse_sctp_adaptation_indication(data)?;
+            Notification::AdaptationIndication(adaptation_indication)
         }
         SCTP_AUTHENTICATION_EVENT => {
             log::debug!("SCTP_AUTHENTICATION_EVENT Notification Received.");
-            // TODO: handle notification
-            Notification::AuthenticationEvent
+            let authentication_event = parse_sctp_authentication_event(data)?;
+            Notification::AuthenticationEvent(authentication_event)
         }
         SCTP_SENDER_DRY_EVENT => {
             log::debug!("SCTP_SENDER_DRY_EVENT Notification Received.");
-            // TODO: handle notification
-            Notification::SenderDryEvent
+            let sender_dry_event = parse_sctp_sender_dry_event(data)?;
+            Notification::SenderDryEvent(sender_dry_event)
         }
         _ => {
             log::debug!("Unsupported notification received.");
             Notification::Unsupported
         }
+    };
+    Ok(notification)
+}
+
+fn parse_sctp_remote_error(data: &[u8]) -> Result<RemoteError, TryFromSliceError> {
+    Ok(RemoteError {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        error: u16::from_ne_bytes(data[8..10].try_into()?),
+        assoc_id: i32::from_ne_bytes(data[10..14].try_into()?),
+        data: data[14..].into(),
+    })
+}
+
+fn parse_sctp_sender_dry_event(data: &[u8]) -> Result<SenderDryEvent, TryFromSliceError> {
+    Ok(SenderDryEvent {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        assoc_id: i32::from_ne_bytes(data[8..12].try_into()?),
+    })
+}
+
+fn parse_sctp_authentication_event(data: &[u8]) -> Result<AuthkeyEvent, TryFromSliceError> {
+    Ok(AuthkeyEvent {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        keynumber: u16::from_ne_bytes(data[8..10].try_into()?),
+        indication: u32::from_ne_bytes(data[12..16].try_into()?),
+        assoc_id: i32::from_ne_bytes(data[16..20].try_into()?),
+    })
+}
+
+fn parse_sctp_adaptation_indication(data: &[u8]) -> Result<AdaptationEvent, TryFromSliceError> {
+    Ok(AdaptationEvent {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        adaptation_ind: u32::from_ne_bytes(data[8..12].try_into()?),
+        assoc_id: i32::from_ne_bytes(data[12..16].try_into()?),
+    })
+}
+
+fn parse_sctp_partial_delivery_event(data: &[u8]) -> Result<PdapiEvent, TryFromSliceError> {
+    Ok(PdapiEvent {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        indication: u32::from_ne_bytes(data[8..12].try_into()?),
+        stream: u32::from_ne_bytes(data[12..16].try_into()?),
+        seq: u32::from_ne_bytes(data[16..20].try_into()?),
+        assoc_id: i32::from_ne_bytes(data[20..24].try_into()?),
+    })
+}
+
+fn parse_sctp_send_failed(data: &[u8]) -> Result<SendFailed, TryFromSliceError> {
+    Ok(SendFailed {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        error: u32::from_ne_bytes(data[8..12].try_into()?),
+        // TODO:
+        assoc_id: i32::from_ne_bytes(data[16..20].try_into()?),
+        data: data[20..].into(),
+    })
+}
+
+fn parse_sctp_shutdown(data: &[u8]) -> Result<Shutdown, TryFromSliceError> {
+    Ok(Shutdown {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        assoc_id: i32::from_ne_bytes(data[8..12].try_into()?),
+    })
+}
+
+fn parse_sctp_assoc_change(data: &[u8]) -> Result<AssociationChange, TryFromSliceError> {
+    Ok(AssociationChange {
+        ev_type: Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?)),
+        flags: u16::from_ne_bytes(data[2..4].try_into()?),
+        length: u32::from_ne_bytes(data[4..8].try_into()?),
+        state: AssocChangeState::from_u16(u16::from_ne_bytes(data[8..10].try_into()?)),
+        error: u16::from_ne_bytes(data[10..12].try_into()?),
+        ob_streams: u16::from_ne_bytes(data[12..14].try_into()?),
+        ib_streams: u16::from_ne_bytes(data[14..16].try_into()?),
+        assoc_id: i32::from_ne_bytes(data[16..20].try_into()?),
+        info: data[20..].into(),
+    })
+}
+
+fn parse_sctp_paddr_change(data: &[u8]) -> Result<PeerAddrChange, std::io::Error> {
+    if data.len() < 20 {
+        log::error!("Invalid data length for SCTP_PADDR_CHANGE");
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidData));
     }
+
+    let ev_type = Event::from_u16(u16::from_ne_bytes(data[0..2].try_into()?));
+    let flags = u16::from_ne_bytes(data[2..4].try_into()?);
+    let length = u32::from_ne_bytes(data[4..8].try_into()?);
+
+    let aaddr_len = std::mem::size_of::<sockaddr_storage>();
+    let aaddr_bytes = &data[8..8 + aaddr_len];
+    let aaddr = get_sockaddr_storage(aaddr_bytes)?;
+
+
+    let offset = 8 + std::mem::size_of::<sockaddr_storage>();
+    let state = u32::from_ne_bytes(data[offset..offset + 4].try_into()?);
+    let error = u32::from_ne_bytes(data[offset + 4..offset + 8].try_into()?);
+    let assoc_id = i32::from_ne_bytes(data[offset + 8..offset + 12].try_into()?);
+
+
+    Ok(PeerAddrChange {
+        ev_type,
+        flags,
+        length,
+        aaddr,
+        state,
+        error,
+        assoc_id,
+    })
+}
+
+
+fn get_sockaddr_storage(data: &[u8]) -> Result<SocketAddr> {
+    const SOCKADDR_STORAGE_LEN: usize = std::mem::size_of::<sockaddr_storage>();
+    let sockaddr_storage = if data.len() >= SOCKADDR_STORAGE_LEN {
+        let data_exact: &[u8; SOCKADDR_STORAGE_LEN] = data.get(..SOCKADDR_STORAGE_LEN)?.try_into().ok()?;
+        let sockaddr_storage_ptr = data_exact.as_ptr() as *const sockaddr_storage;
+        Some(unsafe { std::ptr::read_unaligned(sockaddr_storage_ptr) })
+    } else {
+        None
+    };
+
+
+    let aaddr = match aaddr.ss_family as core::ffi::c_int {
+        libc::AF_INET => {
+            assert!(aaddr_len >= std::mem::size_of::<libc::sockaddr_in>());
+            SocketAddr::V4()
+            // TODO
+        }
+        libc::AF_INET6 => {
+            assert!(aaddr_len >= std::mem::size_of::<libc::sockaddr_in6>());
+            // TODO
+        }
+        _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidData))?,
+    };
 }
 
 // Implementation of Event Subscription
